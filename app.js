@@ -26,6 +26,9 @@ if (!config.FB_APP_SECRET) {
 if (!config.SERVER_URL) { //used for ink to static files
 	throw new Error('missing SERVER_URL');
 }
+if (!config.SENGRID_API_KEY) { 
+	throw new Error('missing SENGRID_API_KEY');
+}
 
 
 
@@ -182,8 +185,75 @@ function handleEcho(messageId, appId, metadata) {
 	console.log("Received echo for message %s and app %d with metadata %s", messageId, appId, metadata);
 }
 
+function sendEmail(subject, content) {
+	const sgMail = require('@sendgrid/mail');
+	var text = content;
+	sgMail.setApiKey(config.SENGRID_API_KEY);
+	const msg = {
+		to: config.EMAIL_TO,
+		from: config.EMAIL_FROM,
+		subject: subject,
+		text: content,
+		html: content,
+	};
+	sgMail.send(msg)
+	.then((result) => {
+   console.log(result);
+  }, (err) => {
+    throw new Error(`Error in sending email: ${err}`);
+	});
+}
+
 function handleApiAiAction(sender, action, responseText, contexts, parameters) {
 	switch (action) {
+		case "faq-delivery":
+			sendTextMessage(sender, responseText);
+			sendTypingOn(sender);
+			setTimeout(function() {
+				let buttons = [
+          {
+            type:"web_url",
+            url:"https://apiaccenture.herokuapp.com/track_order",
+            title:"Track my order"
+          },
+          {
+            type:"phone_number",
+            payload:"+13048396732",
+            title:"Call Us"
+          },
+          {
+						type:"postback",
+            title:"Keep on Chatting",
+            payload:"chat"
+					}
+        ]
+				sendButtonMessage(sender, 'What would you like to do next?', buttons);
+			}, 3000);
+			break;
+		case "detailed-application":
+			if(isDefined(contexts[0]) && contexts[0].name === 'job_application' && contexts[0].parameters) {
+				let phone_number = (isDefined(contexts[0].parameters['phone-number']) &&
+				contexts[0].parameters['phone-number'] !== '') ? contexts[0].parameters['phone-number'] : '';
+				let user_name = (isDefined(contexts[0].parameters['user-name']) &&
+				contexts[0].parameters['user-name'] !== '') ? contexts[0].parameters['user-name'] : '';
+				let previous_job = (isDefined(contexts[0].parameters['previous-job']) &&
+				contexts[0].parameters['previous-job'] !== '') ? contexts[0].parameters['previous-job'] : '';
+				let years_of_experience = (isDefined(contexts[0].parameters['years-of-experience']) &&
+				contexts[0].parameters['years-of-experience'] !== '') ? contexts[0].parameters['years-of-experience'] : '';
+				let job_vacancy = (isDefined(contexts[0].parameters['job-vacancy']) &&
+				contexts[0].parameters['job-vacancy'] !== '') ? contexts[0].parameters['job-vacancy'] : '';
+				
+				if(phone_number != '' && user_name != '' && previous_job != '' & years_of_experience != ''
+					 && job_vacancy != ''){
+					let emailContent = 'A new job enquirey from ' + user_name + ' for the job: ' + job_vacancy +
+						'<br> Previous job position: ' + previous_job + ' , ' +
+						'<br> Years of experience: ' + years_of_experience + ' , ' +
+						'<br> Phone number: ' + phone_number + '.';
+						sendEmail('apiai', emailContent);
+				}
+			}
+			sendTextMessage(sender, responseText);
+			break;
 		case "job-enquiry":
 			let replies =  [
 				{
@@ -740,6 +810,10 @@ function receivedPostback(event) {
 	var payload = event.postback.payload;
 
 	switch (payload) {
+		case "chat":
+		sendTextMessage(senderID, "Let's keep chatting. How else may I help?");
+			break;
+
 		default:
 			//unindentified payload
 			sendTextMessage(senderID, "I'm not sure what you want. Can you be more specific?");

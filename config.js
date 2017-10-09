@@ -4,4 +4,7 @@ module.exports = {
     API_AI_CLIENT_ACCESS_TOKEN: 'ca3f79de51684d22ae690dc9bd3b34d0',
     FB_APP_SECRET: 'f166143573218497bfd1d0185e70af51',
     SERVER_URL: "https://apiaccenture.herokuapp.com/",
+    SENGRID_API_KEY: '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',
+    EMAIL_FROM: 'rcarpe03@gmail.com',
+    EMAIL_TO: 'rcarpe03@gmail.com'
 };
