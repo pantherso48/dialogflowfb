@@ -8,6 +8,9 @@ const bodyParser = require('body-parser');
 const request = require('request');
 const app = express();
 const uuid = require('uuid');
+const pg = require('pg');
+
+pg.defaults.ssl = true;
 
 
 // Messenger API parameters
@@ -206,6 +209,34 @@ function sendEmail(subject, content) {
 
 function handleApiAiAction(sender, action, responseText, contexts, parameters) {
 	switch (action) {
+		case "get-current-weather":
+			if(parameters.hasOwnProperty("geo-city") && parameters["geo-city"] != '') {
+				var request = require('request');
+
+				request({
+					url: 'http://api.openweathermap.org/data/2.5/weather',
+					qs: {
+						appid: config.WEATHER_API_KEY,
+						q: parameters["geo-city"]
+					},
+				}, (error, response, body) => {
+					if(!error && response.statusCode === 200) {
+						let weather = JSON.parse(body);
+						if(weather.hasOwnProperty("weather")) {
+							let reply = `${responseText} ${weather["weather"][0]["description"]}`;
+							sendTextMessage(sender, reply);
+						}
+						else {
+							sendTextMessage(sender, `No weather forecast for ${parameters["geo-city"]}`);
+						}
+					} else {
+						console.log(error);
+					}
+				});
+			} else {
+				sendTextMessage(sender, responseText);
+			}
+			break;
 		case "faq-delivery":
 			sendTextMessage(sender, responseText);
 			sendTypingOn(sender);
@@ -231,7 +262,9 @@ function handleApiAiAction(sender, action, responseText, contexts, parameters) {
 			}, 3000);
 			break;
 		case "detailed-application":
-			if(isDefined(contexts[0]) && contexts[0].name === 'job_application' && contexts[0].parameters) {
+			if(isDefined(contexts[0]) && 
+			 (contexts[0].name == 'job_application' || contexts[0].name == 'job-application-details_dialog_context')
+			 && contexts[0].parameters) {
 				let phone_number = (isDefined(contexts[0].parameters['phone-number']) &&
 				contexts[0].parameters['phone-number'] !== '') ? contexts[0].parameters['phone-number'] : '';
 				let user_name = (isDefined(contexts[0].parameters['user-name']) &&
@@ -242,17 +275,37 @@ function handleApiAiAction(sender, action, responseText, contexts, parameters) {
 				contexts[0].parameters['years-of-experience'] !== '') ? contexts[0].parameters['years-of-experience'] : '';
 				let job_vacancy = (isDefined(contexts[0].parameters['job-vacancy']) &&
 				contexts[0].parameters['job-vacancy'] !== '') ? contexts[0].parameters['job-vacancy'] : '';
-				
-				if(phone_number != '' && user_name != '' && previous_job != '' & years_of_experience != ''
+				 
+				if(user_name != '' && previous_job != '' && years_of_experience == '') {
+					let replies =  [
+						{
+							"content_type":"text",
+							"title":"Less than 1 year",
+							"payload":"Less than 1 year"
+						},
+						{
+							"content_type":"text",
+							"title":"Less than 10 years",
+							"payload":"Less than 10 years"
+						},
+						{
+							"content_type":"text",
+							"title":"Mpre than 10 years",
+							"payload":"More than 10 years"
+						}];
+						sendQuickReply(sender, responseText, replies);
+				} else if(phone_number != '' && user_name != '' && previous_job != '' && years_of_experience != ''
 					 && job_vacancy != ''){
 					let emailContent = 'A new job enquirey from ' + user_name + ' for the job: ' + job_vacancy +
 						'<br> Previous job position: ' + previous_job + ' , ' +
 						'<br> Years of experience: ' + years_of_experience + ' , ' +
 						'<br> Phone number: ' + phone_number + '.';
 						sendEmail('apiai', emailContent);
+						sendTextMessage(sender, responseText);
+				} else {
+					sendTextMessage(sender, responseText);
 				}
-			}
-			sendTextMessage(sender, responseText);
+			} 
 			break;
 		case "job-enquiry":
 			let replies =  [
@@ -416,6 +469,9 @@ function handleApiAiResponse(sender, response) {
 function sendToApiAi(sender, text) {
 
 	sendTypingOn(sender);
+	if (!sessionIds.has(sender)) {
+		sessionIds.set(sender, uuid.v1());
+	}
 	let apiaiRequest = apiAiService.textRequest(text, {
 		sessionId: sessionIds.get(sender)
 	});
@@ -429,9 +485,6 @@ function sendToApiAi(sender, text) {
 	apiaiRequest.on('error', (error) => console.error(error));
 	apiaiRequest.end();
 }
-
-
-
 
 function sendTextMessage(recipientId, text) {
 	var messageData = {
@@ -744,10 +797,44 @@ function greetUserText(userId) {
 			var user = JSON.parse(body);
 
 			if (user.first_name) {
-				console.log("FB user: %s %s, %s",
-					user.first_name, user.last_name, user.gender);
+				var pool = new pg.Pool(config.PG_CONFIG);
+				pool.connect(function(err, client, done) {
+					if (err) {
+						return console.error('Error acquiring client', err.stack);
+					}
+					var rows = [];
+					console.log('fetching user');
+					client.query(`SELECT id FROM users WHERE fb_id='${userId}' LIMIT 1`,
+						function(err, result) {
+							console.log('query result ' + result);
+							if (err) {
+								console.log('Query error: ' + err);
+							} else {
+								console.log('rows: ' + result.rows.length);
+								if (result.rows.length === 0) {
+									let sql = 'INSERT INTO users (fb_id, first_name, last_name, profile_pic, ' +
+										'locale, timezone, gender) VALUES ($1, $2, $3, $4, $5, $6, $7)';
+									console.log('sql: ' + sql);
+									client.query(sql,
+										[
+											userId,
+											user.first_name,
+											user.last_name,
+											user.profile_pic,
+											user.locale,
+											user.timezone,
+											user.gender
+										]);
+								}
+							}
+						});
+				
+				});
+				pool.end();
 
-				sendTextMessage(userId, "Welcome " + user.first_name + '!');
+				sendTextMessage(userId, "Welcome " + user.first_name + '!' +
+				'I can answer FAQ for you ' +
+				'and I perform job interviews. What can I help you with?');
 			} else {
 				console.log("Cannot get data for fb user with id",
 					userId);
@@ -810,10 +897,15 @@ function receivedPostback(event) {
 	var payload = event.postback.payload;
 
 	switch (payload) {
-		case "chat":
-		sendTextMessage(senderID, "Let's keep chatting. How else may I help?");
+		case "GET_STARTED":
+			greetUserText(senderID);
 			break;
-
+		case "JOB_APPLY":
+			sendToApiAi(senderID, "job openings");
+			break;
+		case "chat":
+			sendTextMessage(senderID, "Let's keep chatting. How else may I help?");
+			break;
 		default:
 			//unindentified payload
 			sendTextMessage(senderID, "I'm not sure what you want. Can you be more specific?");
