@@ -9,6 +9,8 @@ const request = require('request');
 const app = express();
 const uuid = require('uuid');
 const pg = require('pg');
+const userData = require('./user');
+const colors = require('./colors');
 
 pg.defaults.ssl = true;
 
@@ -53,14 +55,12 @@ app.use(bodyParser.urlencoded({
 // Process application/json
 app.use(bodyParser.json())
 
-
-
-
 const apiAiService = apiai(config.API_AI_CLIENT_ACCESS_TOKEN, {
 	language: "en",
 	requestSource: "fb"
 });
 const sessionIds = new Map();
+const usersMap = new Map();
 
 // Index route
 app.get('/', function (req, res) {
@@ -125,9 +125,43 @@ app.post('/webhook/', function (req, res) {
 	}
 });
 
+ function getFbObject(userId) {
+ 	return new Promise(function(resolve, reject) {
+		request({
+			uri: 'https://graph.facebook.com/v2.7/' + userId,
+			qs: {
+				access_token: config.FB_PAGE_TOKEN
+			}
+
+		}, function (error, response, body) {
+				if (!error && response.statusCode == 200) {
+					var user = JSON.parse(body);
+					if(!usersMap.has(userId)) {
+						userData((user) => {
+							usersMap.set(userId, user);
+							resolve(user);
+						}, user);
+				  }
+				} else if (error) {
+					reject(error);
+				}
+			}
+		);
+  });
+ }
 
 
+ function setSessionAndUser(senderID,user) {
+		if (!sessionIds.has(senderID)) {
+			sessionIds.set(senderID, uuid.v1());
+		}
 
+		if(!usersMap.has(senderID)) {
+				userData((user) => {
+					usersMap.set(senderID, user);
+				}, user);
+		 }
+}
 
 function receivedMessage(event) {
 
@@ -136,9 +170,7 @@ function receivedMessage(event) {
 	var timeOfMessage = event.timestamp;
 	var message = event.message;
 
-	if (!sessionIds.has(senderID)) {
-		sessionIds.set(senderID, uuid.v1());
-	}
+	setSessionAndUser(senderID);
 	//console.log("Received message for user %d and page %d at %d with message:", senderID, recipientID, timeOfMessage);
 	//console.log(JSON.stringify(message));
 
@@ -209,6 +241,13 @@ function sendEmail(subject, content) {
 
 function handleApiAiAction(sender, action, responseText, contexts, parameters) {
 	switch (action) {
+		case "iphone-colors":
+			colors.readAllColors((allColors) => {
+				let allColorsString = allColors.join(',');
+				let reply = `IPhone 8 is available in ${allColorsString}. What is your favorite color?`;
+				sendTextMessage(sender, reply);
+			});
+			break;
 		case "get-current-weather":
 			if(parameters.hasOwnProperty("geo-city") && parameters["geo-city"] != '') {
 				var request = require('request');
@@ -469,9 +508,7 @@ function handleApiAiResponse(sender, response) {
 function sendToApiAi(sender, text) {
 
 	sendTypingOn(sender);
-	if (!sessionIds.has(sender)) {
-		sessionIds.set(sender, uuid.v1());
-	}
+	setSessionAndUser(sender);
 	let apiaiRequest = apiAiService.textRequest(text, {
 		sessionId: sessionIds.get(sender)
 	});
@@ -785,65 +822,12 @@ function sendAccountLinking(recipientId) {
 
 function greetUserText(userId) {
 	//first read user firstname
-	request({
-		uri: 'https://graph.facebook.com/v2.7/' + userId,
-		qs: {
-			access_token: config.FB_PAGE_TOKEN
-		}
 
-	}, function (error, response, body) {
-		if (!error && response.statusCode == 200) {
+	let user = usersMap.get(userId);
 
-			var user = JSON.parse(body);
-
-			if (user.first_name) {
-				var pool = new pg.Pool(config.PG_CONFIG);
-				pool.connect(function(err, client, done) {
-					if (err) {
-						return console.error('Error acquiring client', err.stack);
-					}
-					var rows = [];
-					console.log('fetching user');
-					client.query(`SELECT id FROM users WHERE fb_id='${userId}' LIMIT 1`,
-						function(err, result) {
-							console.log('query result ' + result);
-							if (err) {
-								console.log('Query error: ' + err);
-							} else {
-								console.log('rows: ' + result.rows.length);
-								if (result.rows.length === 0) {
-									let sql = 'INSERT INTO users (fb_id, first_name, last_name, profile_pic, ' +
-										'locale, timezone, gender) VALUES ($1, $2, $3, $4, $5, $6, $7)';
-									console.log('sql: ' + sql);
-									client.query(sql,
-										[
-											userId,
-											user.first_name,
-											user.last_name,
-											user.profile_pic,
-											user.locale,
-											user.timezone,
-											user.gender
-										]);
-								}
-							}
-						});
-				
-				});
-				pool.end();
-
-				sendTextMessage(userId, "Welcome " + user.first_name + '!' +
-				'I can answer FAQ for you ' +
-				'and I perform job interviews. What can I help you with?');
-			} else {
-				console.log("Cannot get data for fb user with id",
-					userId);
-			}
-		} else {
-			console.error(response.error);
-		}
-
-	});
+	sendTextMessage(userId, "Welcome " + user.first_name + '!' +
+	'I can answer frequently asked questions for you ' + 
+	'and I perform job interviews. What can I help you with?');
 }
 
 /*
@@ -891,31 +875,32 @@ function receivedPostback(event) {
 	var senderID = event.sender.id;
 	var recipientID = event.recipient.id;
 	var timeOfPostback = event.timestamp;
-
-	// The 'payload' param is a developer-defined field which is set in a postback 
-	// button for Structured Messages. 
 	var payload = event.postback.payload;
 
-	switch (payload) {
-		case "GET_STARTED":
-			greetUserText(senderID);
-			break;
-		case "JOB_APPLY":
-			sendToApiAi(senderID, "job openings");
-			break;
-		case "chat":
-			sendTextMessage(senderID, "Let's keep chatting. How else may I help?");
-			break;
-		default:
-			//unindentified payload
-			sendTextMessage(senderID, "I'm not sure what you want. Can you be more specific?");
-			break;
-
-	}
-
-	console.log("Received postback for user %d and page %d with payload '%s' " +
-		"at %d", senderID, recipientID, payload, timeOfPostback);
-
+	getFbObject(senderID)
+	.then((user) => {
+		setSessionAndUser(senderID,user);
+		switch (payload) {
+			case "GET_STARTED":
+				greetUserText(senderID);
+				break;
+			case "JOB_APPLY":
+				sendToApiAi(senderID, "job openings");
+				break;
+			case "chat":
+				sendTextMessage(senderID, "Let's keep chatting. How else may I help?");
+				break;
+			default:
+				//unindentified payload
+				sendTextMessage(senderID, "I'm not sure what you want. Can you be more specific?");
+				break;
+		}
+		console.log("Received postback for user %d and page %d with payload '%s' " +
+			"at %d", senderID, recipientID, payload, timeOfPostback);
+	})
+	.catch((error)=> {
+		console.log(error)
+	});
 }
 
 
