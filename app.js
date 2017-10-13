@@ -137,11 +137,12 @@ app.post('/webhook/', function (req, res) {
 				if (!error && response.statusCode == 200) {
 					var user = JSON.parse(body);
 					if(!usersMap.has(userId)) {
-						userData((user) => {
-							usersMap.set(userId, user);
-							resolve(user);
-						}, user);
-				  }
+						userData(user);
+						usersMap.set(userId, user);
+						resolve(user);
+					}
+					// if you dont resolve after the if it will only resolve first time user is added to session
+					resolve(user);
 				} else if (error) {
 					reject(error);
 				}
@@ -170,7 +171,13 @@ function receivedMessage(event) {
 	var timeOfMessage = event.timestamp;
 	var message = event.message;
 
-	setSessionAndUser(senderID);
+	getFbObject(senderID)
+	.then((user) => {
+		setSessionAndUser(senderID);
+	})
+	.catch((error) => {
+		console.log(`Error in received message ${error}`);
+	})
 	//console.log("Received message for user %d and page %d at %d with message:", senderID, recipientID, timeOfMessage);
 	//console.log(JSON.stringify(message));
 
@@ -241,6 +248,22 @@ function sendEmail(subject, content) {
 
 function handleApiAiAction(sender, action, responseText, contexts, parameters) {
 	switch (action) {
+		case "buy.iphone8":
+			colors.readUserColor((color) => {	
+				let reply;
+				if(color === '') {
+					reply = `What color would you like to order?`;
+				} else {
+					reply = `Would you like to order it in your favorite color: ${color}?`;
+				}
+				sendTextMessage(sender, reply);
+			}, sender);
+			break;
+		case "iphone8_colors-favorite" || "iphone8_colors.iphone8_colors-custom":
+			colors.updateUserColor(parameters["color"], sender);
+			let reply = 'Ok, I like it, too. I\'ll remember that.';
+			sendTextMessage(sender, reply);
+		break;
 		case "iphone-colors":
 			colors.readAllColors((allColors) => {
 				let allColorsString = allColors.join(',');
@@ -363,7 +386,7 @@ function handleApiAiAction(sender, action, responseText, contexts, parameters) {
 					"title":"Not interested",
 					"payload":"Not interested"
 				}];
-				this.sendQuickReply(sender, responseText, replies);
+				sendQuickReply(sender, responseText, replies);
 			break;
 		default:
 			//unhandled action, just send back the text
@@ -374,7 +397,8 @@ function handleApiAiAction(sender, action, responseText, contexts, parameters) {
 function handleMessage(message, sender) {
 	switch (message.type) {
 		case 0: //text
-			sendTextMessage(sender, message.speech);
+			if(message.speech!="")
+				sendTextMessage(sender, message.speech);
 			break;
 		case 2: //quick replies
 			let replies = [];
@@ -508,7 +532,15 @@ function handleApiAiResponse(sender, response) {
 function sendToApiAi(sender, text) {
 
 	sendTypingOn(sender);
-	setSessionAndUser(sender);
+
+	getFbObject(sender)
+	.then((user) => {
+		setSessionAndUser(sender);
+	})
+	.catch((error) => {
+		console.log(`Error in received message ${error}`);
+	});
+	
 	let apiaiRequest = apiAiService.textRequest(text, {
 		sessionId: sessionIds.get(sender)
 	});
@@ -836,30 +868,32 @@ function greetUserText(userId) {
  *
  */
 function callSendAPI(messageData) {
-	request({
-		uri: 'https://graph.facebook.com/v2.6/me/messages',
-		qs: {
-			access_token: config.FB_PAGE_TOKEN
-		},
-		method: 'POST',
-		json: messageData
+	// if(messageData.message.text!="") {
+		request({
+			uri: 'https://graph.facebook.com/v2.6/me/messages',
+			qs: {
+				access_token: config.FB_PAGE_TOKEN
+			},
+			method: 'POST',
+			json: messageData
 
-	}, function (error, response, body) {
-		if (!error && response.statusCode == 200) {
-			var recipientId = body.recipient_id;
-			var messageId = body.message_id;
+		}, function (error, response, body) {
+			if (!error && response.statusCode == 200) {
+				var recipientId = body.recipient_id;
+				var messageId = body.message_id;
 
-			if (messageId) {
-				console.log("Successfully sent message with id %s to recipient %s",
-					messageId, recipientId);
+				if (messageId) {
+					console.log("Successfully sent message with id %s to recipient %s",
+						messageId, recipientId);
+				} else {
+					console.log("Successfully called Send API for recipient %s",
+						recipientId);
+				}
 			} else {
-				console.log("Successfully called Send API for recipient %s",
-					recipientId);
+				console.error("Failed calling Send API", response.statusCode, response.statusMessage, body.error);
 			}
-		} else {
-			console.error("Failed calling Send API", response.statusCode, response.statusMessage, body.error);
-		}
-	});
+		});
+	// }
 }
 
 

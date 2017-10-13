@@ -16,6 +16,7 @@ module.exports = {
                 .query(
                     'SELECT color FROM public.iphone_colors',
                     function(err, result) {
+                        done();
                         if (err) {
                             console.log(err);
                             callback([]);
@@ -27,7 +28,6 @@ module.exports = {
                             callback(colors);
                         };
                     });
-            done();
         });
         pool.end();
     },
@@ -44,6 +44,7 @@ module.exports = {
                     'SELECT color FROM public.user_color WHERE fb_id=$1',
                     [userId],
                     function(err, result) {
+                        // done();
                         if (err) {
                             console.log(err);
                             callback('');
@@ -51,7 +52,6 @@ module.exports = {
                             callback(result.rows[0]['color']);
                         };
                     });
-            done();
         });
         pool.end();
     },
@@ -67,6 +67,7 @@ module.exports = {
             client
                 .query(sql1,
                     function(err, result) {
+                        // done();
                         if (err) {
                             console.log('Query error: ' + err);
                         } else {
@@ -84,8 +85,6 @@ module.exports = {
                         }
                     }
                     );
-
-            done();
         });
         pool.end();
     }

@@ -5,7 +5,7 @@ const pg = require('pg');
 
 pg.defaults.ssl=true;
 
-module.exports = (callback, user) => {
+module.exports = (user) => {
   // request({
 	// 	uri: 'https://graph.facebook.com/v2.7/' + userId,
 	// 	qs: {
@@ -50,7 +50,6 @@ module.exports = (callback, user) => {
 								}
 							}
             });
-            callback(user);
 				});
 				pool.end();
 			}
